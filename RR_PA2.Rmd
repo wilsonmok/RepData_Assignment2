@@ -1,0 +1,155 @@
+---
+title: "RR_PA2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reproducible Research - Assignment 2
+In this assignment, we will examine the [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) from the National Weather Service. This dataset contains weather events between year 1950 to November 2011.  
+
+We will be answering 2 questions:  
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?  
+2. Across United States, which types of events have the greatest economic consequences?  
+
+In order to answer the questions above, we found 5 keys variables:  
+*EVTYPE*: Identify the type of weather event  
+*FATALITIES and INJURIES*: This 2 variables measures how weather events impact **popluation health**.  
+*PROPDMG, PROPDMGEXP, CROPDMG and CROPDMGEXP*: This 4 variables meansures how weather events impact **economic**.  
+
+### Library used
+```{r libraries, message=FALSE, warning=FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+```
+
+### Reading Data and check number of rows
+```{r readingData}
+storm_data <- read.table("../data/repdata%2Fdata%2FStormData.csv", header=TRUE, sep=",", quote = "\"")
+
+dim(storm_data)
+```
+
+### Data Processing
+A few data processing steps are required:  
+1. A mixedcases in EVTYPE. This results in having duplicate values.  We will be making the data lowercase for this field.  
+```{r dataProcessing1}
+storm_data <- mutate(storm_data, EVTYPE=tolower(EVTYPE))
+```
+  
+2. Convert the PROPDMGEXP and CROPDMGEXP from string representation of magitude into numerical
+```{r dataProcessing2}
+convertDmgMagitude <- function (dmgExp) {
+    if(!is.na(dmgExp)) {
+        dmgExpKey <- tolower(dmgExp)
+
+        multipler <- 0
+        
+        if(length(grep("[1-9]", dmgExpKey))) {
+            multiper <- as.numeric(dmgExpKey)
+        }
+        else if(dmgExpKey == "k") {
+            multipler <- 3
+        }
+        else if(dmgExpKey == "m") {
+            multipler <- 6
+        }
+        else if(dmgExpKey == "b") {
+            multipler <- 9
+        }
+        else {
+            multipler <- 0
+        }
+    
+        10^multipler
+    }
+    else {
+        0
+    }
+}
+
+prop_dmg_exp_n <- sapply(storm_data$PROPDMGEXP, FUN=convertDmgMagitude)
+crop_dmg_exp_n <- sapply(storm_data$CROPDMGEXP, FUN=convertDmgMagitude)
+
+storm_data$PROPDMGEXP2 <- prop_dmg_exp_n
+storm_data$CROPDMGEXP2 <- crop_dmg_exp_n
+```
+
+### Question 1: Which types of events are most harmful with respect to population health?
+Population health is broken down into 2 variables: Fatalities and Injuries.  
+  
+Check to ensure the dataset has no NAs.  
+```{r datachecking1}
+sum(is.na(storm_data$EVTYPE))
+sum(is.na(storm_data$FATALITIES))
+sum(is.na(storm_data$INJURIES))
+```
+  
+We aggregate the Fatalities and Injuries to create the totalharm variable. We then display the top 5 total poplution harm done for each weather event.
+```{r evtypePopHealth}
+pop_harm <- storm_data[,c("EVTYPE", "FATALITIES", "INJURIES")]
+pop_harm <- filter(pop_harm, FATALITIES > 0 | INJURIES > 0)
+
+evtype_pop_harm_group <- group_by(pop_harm, EVTYPE)
+evtype_pop_harm <- summarise(evtype_pop_harm_group, 
+                             totalfatalities = sum(FATALITIES),
+                             totalinjuries = sum(INJURIES))
+
+evtype_pop_harm <- mutate(evtype_pop_harm, 
+                          totalharm = totalfatalities + totalinjuries)
+
+top5_pop_harm <- head(evtype_pop_harm[order(evtype_pop_harm$totalharm, 
+                           decreasing = TRUE),], n=5)
+
+ggplot(data=top5_pop_harm, aes(EVTYPE, totalharm)) + 
+    geom_bar(stat="identity") +
+    labs(x="Event Type", y="Number of Popluation harm", 
+         title="Top 5 of Popluation harm for each event")
+```
+  
+The most harmful event to the poplution health is tornado.
+  
+### Question 2: Across United States, which types of events have the greatest economic consequences?
+Economic consequences are measured using PROPDMG, PROPDMGEXP, CROPDMG and CROPDMGEXP. The PROPDMGEXP and CROPDMGEXP represent the magnitude of the damage. Based on the documentation, we will be focusing on the magitude of "B" (Billion).  
+
+Check to ensure the dataset has no NAs and the DMGs are >= 0
+```{r datachecking2}
+sum(is.na(storm_data$EVTYPE))
+sum(is.na(storm_data$PROPDMG))
+sum(storm_data$PROPDMG < 0)
+sum(is.na(storm_data$CROPDMG))
+sum(storm_data$CROPDMG < 0)
+```
+
+```{r evtypeEconomicDmg}
+prop_dmg <- storm_data[, c("EVTYPE", "PROPDMG", "PROPDMGEXP2")]
+prop_dmg <- filter(prop_dmg, PROPDMG > 0) %>%
+    rename(DMG = PROPDMG) %>%
+    rename(DMGEXP = PROPDMGEXP2)
+
+crop_dmg <- storm_data[, c("EVTYPE", "CROPDMG", "CROPDMGEXP2")]
+crop_dmg <- filter(crop_dmg, CROPDMG > 0) %>%
+    rename(DMG = CROPDMG) %>%
+    rename(DMGEXP = CROPDMGEXP2)
+
+econ_dmg <- rbind(prop_dmg, crop_dmg)
+econ_dmg <- mutate(econ_dmg, REALDMG = DMG * DMGEXP)
+
+
+econ_dmg_group <- group_by(econ_dmg, EVTYPE)
+evtype_econ_dmg <- summarise(econ_dmg_group, 
+                             totaldmg = sum(REALDMG))
+
+top5_econ_dmg <- head(evtype_econ_dmg[order(evtype_econ_dmg$totaldmg, 
+                           decreasing = TRUE),], n=5)
+
+ggplot(data=top5_econ_dmg, aes(EVTYPE, totaldmg)) + 
+    geom_bar(stat="identity") +
+    labs(x="Event Type", y="Amount of Economic damage", 
+         title="Top 5 of Economic damage for each event")
+```
+
+The most economic damage event is flood.
